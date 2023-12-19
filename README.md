@@ -1,8 +1,6 @@
 # RSV Neutralization Assay Utility Scripts
 
-A set of Python scripts to annotate, compile and analyze data from an in-house RSV neutralization assay.
-
-### Python scripts that:
+A set of scalable Python scripts to annotate, compile and analyze high-throughput RSV neutralization assay data.
 
 #### reconf.py 
 compile and annotate count data from Immunospot S6 Analyzer in report-friendly .xlsx format
