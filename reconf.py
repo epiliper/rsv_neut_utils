@@ -1,214 +1,212 @@
 #!/usr/bin/env python3
 
-import pandas as pd
-import numpy as n
+"""
+Author: Eli Piliper
+
+This script converts .xlsx files of plate counts from the CTL S6 imager
+into per-sample reports containing sample ID, dilution, spot counts, and plateID.
+
+The output of this script should be used with the Fit.py script to generate 4-parameter logistic
+curves for obtaining ND50 and ND80 values from data generated with the Greninger Lab's
+RSV focus-reduction neutralization assay (RSV FRNT).
+
+Note that the CTL S6 imager outputs data in .xls format. These files will need to be
+converted to .xlsx prior to running this and other scripts.
+"""
+
 import openpyxl as xl
-import numpy as np
-#create well labels
+from typing import List, Tuple
+import logging
+import argparse
+import sys
+import os
 
-rows = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
-cols = np.arange(1, 13, 1).tolist()
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
-
-def ctlimport(
-        workbooks,
-        ctl,
-        export):
-
-    # load all CTL .xlsx files, generate plateID strings from their filenames.
-    ctls = [xl.load_workbook(excel).active for excel in ctl]
-
-    stuff = [sheet.iter_cols(min_col=3, max_col=14, min_row=55, max_row=62) for sheet in ctls] 
-
-    # load worksheet containing sample names. 
-    samplesheets = [xl.load_workbook(workbook)['Serum Dilution'] for workbook in workbooks]
-    # dates = [str(workbook).partition('/')[2] for workbook in workbooks
-    #          if '/' in workbook]
-    # dates = [str(date).partition('.')[0] for date in dates]
-
-    numofplates = len(ctls) 
-
-    labels = []
-    for i in np.arange(0, numofplates, 1):
-        for col in cols:
-            for row in rows:
-                labels.append(row + str(col))
-
-    #samplexlsx = xl.load_workbook('2023-May-23 FFA RSVNeut.xlsx')['Serum Dilution'] 
-
-    # plateIDs = []
-    # for platenum in np.arange(1, numofplates+1, 1):
-    #     for i in np.arange(0, 96, 1):
-    #         plateIDs.append(f'plate {platenum} {plateID}')
-
-    plateIDs = [str(countsheet).replace('.xlsx', '') for countsheet in ctl]
-
-    num_wells = np.arange(2, (numofplates * 96) + 1, 1).tolist()
-
-    #create new workbook, sheet, and label columns
-    port = xl.Workbook()
-    new = port.active
-
-    new['A1'].value = 'foci_num'
-    new['B1'].value = 'fold_dil'
-    new['C1'].value = 'type'
-    new['D1'].value = 'wellID'
-    new['E1'].value = 'sample_num'
-    new['F1'].value = 'plateID'
-
-    # BEGIN EXPORT: read only rows in neut worksheet that have values. 
-    
-    print(numofplates)
-    for samplexlsx in samplesheets:
-        if numofplates == 7:
-            sumofsamples = [sample for sample in samplexlsx['C'][1:samplexlsx.max_row]
-                            if sample.value != None]
-        else:
-            sumofsamples = [sample for sample in samplexlsx['C'][1:4*numofplates+1]]
-
-    # for i, sample in enumerate(sumofsamples):
-    #     if '/' in sample.value:
-    #         sumofsamples[i].value = str(sample.value).replace('/', '.')
-    #     else:
-    #         pass
-
-    samplelist = []
-    for i in np.arange(0, 2, 1):
-        for sample in sumofsamples:
-            samplelist.append(sample)
-            samplelist.append(sample)
-
-    #twice the samples, but each will fill only 1 column (half the coverage)
-    #one chunk = 1 plate
-
-    chunk_size = 8
-    chunked_list = [samplelist[i:i+chunk_size] for i in range(0, len(samplelist), chunk_size)]
-
-    # create dilution labels
-    dils = []
-    for i in np.arange(0, 2, 1):
-        for group in chunked_list:
-            for sample in group: 
-                dils.append(20)
-                dils.append(60)
-                dils.append(180)
-                dils.append(540)
-                dils.append(1620)
-                dils.append(4860)
-
-    sampleids = []
-    for index, i in  enumerate(np.arange(0, len(ctl), 1)):
-        for sampid in np.arange(0, 5, 1):
-            sampleids.append(i)
-            sampleids.append(i)
-            sampleids.append(i)
-            sampleids.append(i)
-            sampleids.append(i)
-            sampleids.append(i)
-    
-    dils = [dils[i:i+6] for i in range(0, len(dils), 6)]
-
-    # negatives occupy rows A and H, and columns 1 and 12.
-    negs = [num for num in np.arange(2, 96*numofplates + 1, 1).tolist()
-            if num > 9 if (num-1)% 8 == 0 or (num-2)% 8 == 0]
-
-    for a in np.arange(2, 10, 1):
-        for b in np.arange(0, numofplates, 1):
-            negs.append((a + 96*b))
-
-    for a in np.arange(89, 98, 1):
-        for b in np.arange(0, numofplates, 1):
-            negs.append((a+96*b))
-
-    negs.sort()
+# Constants
+ROWS = ["A", "B", "C", "D", "E", "F", "G", "H"]
+COLS = list(range(1, 13))
 
 
-    # VOCs occupy rows B-G of columns 10 and 11. 
-    vocs = []
+def load_workbooks(file_paths: List[str]) -> List[xl.Workbook]:
+    """Load Excel workbooks from given file paths."""
+    try:
+        return [xl.load_workbook(file) for file in file_paths]
+    except Exception as e:
+        logging.error(f"Error loading workbooks: {e}")
+        raise
 
-    for a in np.arange(74,80,1):
-        for b in np.arange(0, numofplates, 1):
-            vocs.append((a+96*b)+1)
 
-    for a in np.arange(82,88, 1):
-        for b in np.arange(0,numofplates,1):
-            vocs.append((a+96*b)+1)
+def get_sheet_data(sheets: List[xl.Worksheet]) -> List[Tuple]:
+    """Extract data from specific cells in the sheets."""
+    return [
+        sheet.iter_cols(min_col=3, max_col=14, min_row=55, max_row=62)
+        for sheet in sheets
+    ]
 
+
+def generate_labels(num_plates: int) -> List[str]:
+    """Generate well labels for all plates."""
+    return [f"{row}{col}" for _ in range(num_plates) for col in COLS for row in ROWS]
+
+
+def create_new_workbook() -> Tuple[xl.Workbook, xl.Worksheet]:
+    """Create a new workbook and set up the header row."""
+    workbook = xl.Workbook()
+    sheet = workbook.active
+    headers = ["foci_num", "fold_dil", "type", "wellID", "sample_num", "plateID"]
+    for col, header in enumerate(headers, start=1):
+        sheet.cell(row=1, column=col, value=header)
+    return workbook, sheet
+
+
+def process_sample_data(sample_sheets: List[xl.Worksheet]) -> List[str]:
+    """Process sample data from the sample sheets."""
+    samples = []
+    for sheet in sample_sheets:
+        column_c = sheet["C"]
+        for cell in column_c[1:]:  # Start from the second row (index 1)
+            if cell.value is not None:
+                samples.append(cell.value)
+            else:
+                break  # Stop when we hit empty cell (end of run)
+    return samples * 2  # samples were run in duplicate, so make two sets of metadata
+
+
+def generate_dilutions(num_samples: int) -> List[int]:
+    """
+    Generate dilution values for samples
+    TODO: read runsheets for dilution information to avoid hardcoding
+    """
+    dilutions = [20, 60, 180, 540, 1620, 4860]
+    return dilutions * (num_samples // 6)
+
+
+def identify_special_wells(num_plates: int) -> Tuple[List[int], List[int]]:
+    """
+    Identify wells for negatives and VOCs.
+
+        VOCs = rows B-G of columns 10 and 11
+        Negatives = rows A and H, and columns 1 and 12
+
+    """
+    total_wells = 96 * num_plates
+    negatives = [
+        i
+        for i in range(1, total_wells + 1)
+        if i > 8 and ((i - 1) % 8 == 0 or (i - 2) % 8 == 0)
+    ]
+    negatives.extend([a + 96 * b for a in range(1, 9) for b in range(num_plates)])
+    negatives.extend([a + 96 * b for a in range(88, 97) for b in range(num_plates)])
+    negatives.sort()
+
+    vocs = [a + 96 * b for a in range(73, 79) for b in range(num_plates)]
+    vocs.extend([a + 96 * b for a in range(81, 87) for b in range(num_plates)])
     vocs.sort()
 
-    # create indices for wells that *aren't* negatives or VOCs
-    samplenums = [num for num in num_wells
-        if (num not in negs) and (num not in vocs)]
-
-    both_sample_cols = [samplenums[i:i+12] for i in range(0, len(samplenums), 12)]
-
-    platebyplate = [both_sample_cols[i:i+4] for i in range(0, len(both_sample_cols), 4)]
-
-    each_sample_col = [samplenums[i:i+6] for i in range(0, len(samplenums), 6)]
+    return negatives, vocs
 
 
-    # fill new sheet with counts from CTL file
-    for index, sheet in enumerate(stuff):
-        for i, oldcol in enumerate(sheet, 0):
-            for row, count in enumerate(oldcol):
-                new.cell(row=(row+(8*i))+2+(96*index), column=1).value = count.value
+def ctlimport(workbooks: List[str], ctl: List[str], export: str):
+    """Main function to process CTL import and generate the output file."""
+    try:
+        # load ctl data
+        ctl_books = load_workbooks(ctl)
+        ctl_sheets = [book.active for book in ctl_books]
+        sample_sheets = [xl.load_workbook(wb)["Serum Dilution"] for wb in workbooks]
 
-    # fill new sheet with sample names from neut assay worksheet
-    for cellnums, sampleid in zip(each_sample_col, samplelist):
-        for cell in new['C'][cellnums[0]-1:cellnums[5]]:
-            cell.value = sampleid.value
+        num_plates = len(ctl_sheets)
+        logging.info(f"Processing {num_plates} plates")
 
-    for dil, col in zip(dils, each_sample_col):
-        for d, cell in zip(dil, new['B'][col[0]-1:col[5]]):
-            cell.value = d 
-    
-    for i, plate in enumerate(platebyplate):
-        for both_cols in platebyplate:
-            i = 0
-            for col in both_cols:
-                i += 1
-                for cell in new['E'][col[0]-1:col[5]]:
-                    cell.value = i
-                for cell in new['E'][col[6]-1:col[11]]:
-                    cell.value = i
-                    
+        # generate labels and plate IDs
+        labels = generate_labels(num_plates)
+        plate_ids = [
+            os.path.basename(countsheet).replace(".xlsx", "") for countsheet in ctl
+        ]
 
-    # fill new sheet with well labels
-    for label, row in zip(labels, new.iter_rows(min_row=2, max_row=96*numofplates+1, min_col =4,  max_col=4)):
-        for cell in row:
-            cell.value = label
+        # create new workbook
+        new_workbook, new_sheet = create_new_workbook()
 
-    # fill new sheet with plate IDs
-    for i, plateID in enumerate(plateIDs, 1):
-        # for cell in new['F'][i+(96*(i-1)):i*96+1]:
-        for cell in new['F'][1+(96*(i-1)): 97*(i)]:
-            cell.value = plateIDs[i-1]
+        # process sample data
+        samples = process_sample_data(sample_sheets, num_plates)
+        dilutions = generate_dilutions(len(samples))
 
-# the sample in every 1st and 8th row of every 8 rows is a negative. Annotate it as such.
-    for i in np.arange(0, len(negs), 1):
-        new.cell(row=negs[i], column=3).value = 'negative'
+        negatives, vocs = identify_special_wells(num_plates)
 
-# annotate VOC
-    for i in np.arange(0, len(vocs), 1):
-        new.cell(row=vocs[i], column=3).value = 'VOC'
+        # fill ouput with sample, dilution, neutralizing activity
+        sheet_data = get_sheet_data(ctl_sheets)
+        for index, sheet in enumerate(sheet_data):
+            for i, old_col in enumerate(sheet, 0):
+                for row, count in enumerate(old_col):
+                    new_sheet.cell(
+                        row=(row + (8 * i)) + 1 + (96 * index),
+                        column=1,
+                        value=count.value,
+                    )
+
+        total_wells = 96 * num_plates
+        sample_index = 0
+        dilution_index = 0
+
+        for well in range(1, total_wells + 1):
+            row = new_sheet[well + 1]  # +1 because row 1 is the header
+
+            if well in negatives:
+                row[2].value = "negative"  # type
+                row[1].value = None  # fold_dil
+            elif well in vocs:
+                row[2].value = "VOC"
+                row[1].value = None
+            else:
+                row[2].value = samples[sample_index]
+                row[1].value = dilutions[dilution_index]
+                sample_index = (sample_index + 1) % len(samples)
+                dilution_index = (dilution_index + 1) % len(dilutions)
+
+            row[3].value = labels[well - 1]  # well number on run plate
+            row[4].value = (well - 1) // 6 + 1  # sample number on run plate
+            row[5].value = plate_ids[(well - 1) // 96]  # plate ID
+
+        # write output
+        new_workbook.save(f"{export}.xlsx")
+        logging.info(f"Run saved to {export}.xlsx")
+
+    except Exception as e:
+        logging.error(f"Run import and analysis failed!: {e}")
+        raise
 
 
-    for type, dil in zip(new['C'][0:96*numofplates + 1], new['B'][0:96*numofplates + 1]):
-        if type.value == 'VOC':
-            dil.value = ''
-        else:
-            pass
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="Process CTL import and generate output file."
+    )
+    parser.add_argument(
+        "-w", "--workbooks", nargs="+", required=True, help="List of workbook files"
+    )
+    parser.add_argument(
+        "-c", "--ctl", nargs="+", required=True, help="List of CTL xlsx files"
+    )
+    parser.add_argument(
+        "-e",
+        "--export",
+        required=True,
+        help="Name of the export file",
+    )
+    return parser.parse_args()
 
 
-    for type, samplenum in zip(new['C'][0:96*numofplates + 1], new['E'][0:96*numofplates + 1]):
-        if type.value == 'VOC':
-            samplenum.value = ''
-        else: 
-            pass
-
-    port.save(str(export)+'.xlsx')
-
-
-
+def main():
+    """Main entry point of the script."""
+    args = parse_arguments()
+    try:
+        ctlimport(args.workbooks, args.ctl, args.export)
+    except Exception as e:
+        logging.error(f"Run analysis failed! {e}")
+        sys.exit(1)
 
 
+if __name__ == "__main__":
+    main()
